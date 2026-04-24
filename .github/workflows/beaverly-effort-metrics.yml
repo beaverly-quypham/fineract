@@ -1,11 +1,11 @@
 name: Beaverly Effort Metrics
 
 on:
-  # Ongoing events — fire on every PR and push to develop
+  # Ongoing events — fire on every PR and push to main
   pull_request:
     types: [opened, synchronize, closed]
   push:
-    branches: [develop]
+    branches: [main]
   # One-time full-history sync — trigger manually after adding the repo to Beaverly
   workflow_dispatch:
 
@@ -25,7 +25,7 @@ jobs:
 
       - name: Collect and send git metrics
         env:
-          BEAVERLY_API_URL: https://mille-api.futurify.io/beaverly
+          BEAVERLY_API_URL: https://mille-api.futurify.io/beaverly-staging
           BEAVERLY_KEY: ${{ secrets.BEAVERLY_KEY }}
         run: |
           set -euo pipefail
@@ -125,7 +125,7 @@ jobs:
 
       - name: Collect and send full git history in chunks
         env:
-          BEAVERLY_API_URL: https://mille-api.futurify.io/beaverly
+          BEAVERLY_API_URL: https://mille-api.futurify.io/beaverly-staging
           BEAVERLY_KEY: ${{ secrets.BEAVERLY_KEY }}
           GH_TOKEN: ${{ github.token }}
           COMMIT_CHUNK_SIZE: "200"
