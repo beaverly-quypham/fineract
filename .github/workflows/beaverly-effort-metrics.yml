@@ -1,11 +1,11 @@
 name: Beaverly Effort Metrics
 
 on:
-  # Ongoing events — fire on every PR and push to main
+  # Ongoing events — fire on every PR and push to develop
   pull_request:
     types: [opened, synchronize, closed]
   push:
-    branches: [main]
+    branches: [develop]
   # One-time full-history sync — trigger manually after adding the repo to Beaverly
   workflow_dispatch:
 
