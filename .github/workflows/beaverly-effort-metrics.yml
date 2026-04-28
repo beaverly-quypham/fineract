@@ -25,7 +25,7 @@ jobs:
 
       - name: Collect and send git metrics
         env:
-          BEAVERLY_API_URL: https://e3b7-2001-ee0-52a9-fc60-e0d8-304e-1d99-7e26.ngrok-free.app
+          BEAVERLY_API_URL: https://mille-api.futurify.io/beaverly
           BEAVERLY_KEY: ${{ secrets.BEAVERLY_KEY }}
         run: |
           set -euo pipefail
@@ -125,7 +125,7 @@ jobs:
 
       - name: Collect and send full git history in chunks
         env:
-          BEAVERLY_API_URL: https://e3b7-2001-ee0-52a9-fc60-e0d8-304e-1d99-7e26.ngrok-free.app
+          BEAVERLY_API_URL: https://mille-api.futurify.io/beaverly
           BEAVERLY_KEY: ${{ secrets.BEAVERLY_KEY }}
           GH_TOKEN: ${{ github.token }}
           COMMIT_CHUNK_SIZE: "200"
