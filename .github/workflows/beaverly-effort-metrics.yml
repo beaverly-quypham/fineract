@@ -34,6 +34,17 @@ jobs:
           REPO="${{ github.repository }}"
           REPO_ID="${{ github.event.repository.id }}"
 
+          # ── Fetch fiscal-year sync cutoff from Beaverly ───────────────────
+          SYNC_CONFIG=$(curl -fsSL -X GET "${BEAVERLY_API_URL}/api/v1/webhooks/github/sync-config" \
+            -H "Authorization: Bearer ${BEAVERLY_KEY}")
+          SINCE_DATE=$(echo "$SYNC_CONFIG" | jq -r '.since_date // empty')
+          SINCE_TS=0
+          GIT_SINCE_ARG=""
+          if [ -n "$SINCE_DATE" ]; then
+            SINCE_TS=$(date -d "$SINCE_DATE" +%s)
+            GIT_SINCE_ARG="--after=${SINCE_DATE}"
+          fi
+
           # ── Determine commit range ────────────────────────────────────────
           if [ "$EVENT" = "pull_request" ]; then
             BASE="${{ github.event.pull_request.base.sha }}"
@@ -49,7 +60,7 @@ jobs:
             fi
           fi
 
-          # ── Build commits JSON array ──────────────────────────────────────
+          # ── Build commits JSON array (fiscal-year filtered) ───────────────
           COMMITS_JSON="[]"
           while IFS='|' read -r SHA AN AE AI CN CE CI MSG; do
             [ -z "$SHA" ] && continue
@@ -73,25 +84,35 @@ jobs:
                 lines_added:$lines_added,lines_deleted:$lines_deleted,
                 is_merge_commit:$is_merge_commit}')
             COMMITS_JSON=$(echo "$COMMITS_JSON" | jq --argjson c "$COMMIT" '. + [$c]')
-          done < <(git log --format="%H|%an|%ae|%aI|%cn|%ce|%cI|%s" "$RANGE" 2>/dev/null || true)
+          done < <(git log --format="%H|%an|%ae|%aI|%cn|%ce|%cI|%s" "$RANGE" $GIT_SINCE_ARG 2>/dev/null || true)
 
-          # ── Build pull_request block (PR events only) ─────────────────────
+          # ── Build pull_request block (PR events only, fiscal-year filtered) ─
           PR_JSON="null"
           if [ "$EVENT" = "pull_request" ]; then
-            PR_JSON=$(jq -n \
-              --argjson number "${{ github.event.pull_request.number }}" \
-              --arg title "${{ github.event.pull_request.title }}" \
-              --arg state "${{ github.event.pull_request.state }}" \
-              --arg url "${{ github.event.pull_request.html_url }}" \
-              --arg source_branch "${{ github.head_ref }}" \
-              --arg target_branch "${{ github.base_ref }}" \
-              --arg author_name "${{ github.event.pull_request.user.login }}" \
-              --arg created_at "${{ github.event.pull_request.created_at }}" \
-              --arg updated_at "${{ github.event.pull_request.updated_at }}" \
-              '{number:$number,title:$title,state:$state,url:$url,
-                source_branch:$source_branch,target_branch:$target_branch,
-                author_name:$author_name,created_at:$created_at,
-                updated_at:$updated_at}')
+            PR_CREATED_TS=$(date -d "${{ github.event.pull_request.created_at }}" +%s)
+            if [ "$PR_CREATED_TS" -ge "$SINCE_TS" ]; then
+              PR_JSON=$(jq -n \
+                --argjson number "${{ github.event.pull_request.number }}" \
+                --arg title "${{ github.event.pull_request.title }}" \
+                --arg state "${{ github.event.pull_request.state }}" \
+                --arg url "${{ github.event.pull_request.html_url }}" \
+                --arg source_branch "${{ github.head_ref }}" \
+                --arg target_branch "${{ github.base_ref }}" \
+                --arg author_name "${{ github.event.pull_request.user.login }}" \
+                --arg created_at "${{ github.event.pull_request.created_at }}" \
+                --arg updated_at "${{ github.event.pull_request.updated_at }}" \
+                '{number:$number,title:$title,state:$state,url:$url,
+                  source_branch:$source_branch,target_branch:$target_branch,
+                  author_name:$author_name,created_at:$created_at,
+                  updated_at:$updated_at}')
+            fi
+          fi
+
+          # ── Skip if nothing falls within the fiscal year range ────────────
+          COMMIT_COUNT=$(echo "$COMMITS_JSON" | jq 'length')
+          if [ "$COMMIT_COUNT" -eq 0 ] && [ "$PR_JSON" = "null" ]; then
+            echo "No commits or PRs within fiscal year range — skipping."
+            exit 0
           fi
 
           PAYLOAD=$(jq -n \
@@ -136,24 +157,43 @@ jobs:
           REPO="${{ github.repository }}"
           REPO_ID="${{ github.event.repository.id }}"
 
-          # ── Collect ALL commits (all branches) ────────────────────────────
-          echo "Collecting full commit history..."
+          # ── Fetch fiscal-year sync cutoff from Beaverly ───────────────────
+          echo "Fetching sync config from Beaverly..."
+          SYNC_CONFIG=$(curl -fsSL -X GET "${BEAVERLY_API_URL}/api/v1/webhooks/github/sync-config" \
+            -H "Authorization: Bearer ${BEAVERLY_KEY}")
+          SINCE_DATE=$(echo "$SYNC_CONFIG" | jq -r '.since_date // empty')
+          if [ -n "$SINCE_DATE" ]; then
+            echo "Fiscal year cutoff: collecting commits after $SINCE_DATE"
+            GIT_LOG_SINCE="--after=${SINCE_DATE}"
+          else
+            echo "No fiscal year configured — collecting full history"
+            GIT_LOG_SINCE=""
+          fi
+
+          # ── Collect commits (all branches, filtered by fiscal year) ───────
+          echo "Collecting commit history..."
           ALL_COMMITS_FILE=$(mktemp)
-          git log --format="%H|%an|%ae|%aI|%cn|%ce|%cI|%s" --all > "$ALL_COMMITS_FILE"
+          git log --format="%H|%an|%ae|%aI|%cn|%ce|%cI|%s" --all $GIT_LOG_SINCE > "$ALL_COMMITS_FILE"
           TOTAL_COMMITS=$(wc -l < "$ALL_COMMITS_FILE")
           echo "Total commits: $TOTAL_COMMITS"
 
           TOTAL_COMMIT_PAGES=$(( (TOTAL_COMMITS + COMMIT_CHUNK_SIZE - 1) / COMMIT_CHUNK_SIZE ))
           [ "$TOTAL_COMMIT_PAGES" -eq 0 ] && TOTAL_COMMIT_PAGES=1
 
-          # ── Collect ALL PRs via GitHub CLI ────────────────────────────────
+          # ── Collect PRs via GitHub CLI, filtered by fiscal year ──────────
           echo "Collecting pull requests..."
-          ALL_PRS_FILE=$(mktemp)
+          ALL_PRS_RAW=$(mktemp)
           gh pr list \
             --limit 10000 \
             --state all \
             --json number,title,state,url,headRefName,baseRefName,author,createdAt,updatedAt,mergedAt \
-            > "$ALL_PRS_FILE"
+            > "$ALL_PRS_RAW"
+          ALL_PRS_FILE=$(mktemp)
+          if [ -n "$SINCE_DATE" ]; then
+            jq --arg since "$SINCE_DATE" '[.[] | select(.createdAt >= $since)]' "$ALL_PRS_RAW" > "$ALL_PRS_FILE"
+          else
+            cp "$ALL_PRS_RAW" "$ALL_PRS_FILE"
+          fi
           TOTAL_PRS=$(jq 'length' "$ALL_PRS_FILE")
           echo "Total PRs: $TOTAL_PRS"
 
